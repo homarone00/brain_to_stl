@@ -1,0 +1,10 @@
+hd-bet>=2.0.1
+nibabel>=5.2
+numpy>=1.24
+scikit-image>=0.22
+
+[build]
+pyinstaller>=6.6
+
+[legacy-hdbet]
+brainles-hd-bet>=0.0.11

@@ -1,3 +1,18 @@
+Metadata-Version: 2.4
+Name: brain-to-stl
+Version: 0.1.0
+Summary: GUI tool for HD-BET skull stripping and NIfTI to printable STL conversion.
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: hd-bet>=2.0.1
+Requires-Dist: nibabel>=5.2
+Requires-Dist: numpy>=1.24
+Requires-Dist: scikit-image>=0.22
+Provides-Extra: legacy-hdbet
+Requires-Dist: brainles-hd-bet>=0.0.11; extra == "legacy-hdbet"
+Provides-Extra: build
+Requires-Dist: pyinstaller>=6.6; extra == "build"
+
 Brain to STL
 ============
 

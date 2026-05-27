@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "brain-to-stl"
+version = "0.1.0"
+description = "GUI tool for HD-BET skull stripping and NIfTI to printable STL conversion."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "hd-bet>=2.0.1",
+  "nibabel>=5.2",
+  "numpy>=1.24",
+  "scikit-image>=0.22",
+]
+
+[project.optional-dependencies]
+legacy-hdbet = [
+  "brainles-hd-bet>=0.0.11",
+]
+build = [
+  "pyinstaller>=6.6",
+]
+
+[project.scripts]
+brain-to-stl = "brain_to_stl.gui:main"
+
+[tool.setuptools.packages.find]
+include = ["brain_to_stl*"]
