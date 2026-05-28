@@ -1,17 +1,23 @@
-Brain to STL
-============
+BrainToSTL
+==========
 
-A standalone desktop GUI for:
+Turn a brain scan into a 3D-printable brain. Because sometimes the correct answer to medical imaging is: "what if I could hold this?"
 
-1. Selecting an input `.nii`/`.nii.gz` MRI volume or a DICOM series folder.
-2. Converting DICOM to NIfTI when needed.
-3. Running HD-BET skull stripping.
-4. Converting the skull-stripped NIfTI volume into a binary STL mesh for 3D printing.
+BrainToSTL is a Windows-friendly desktop app that takes a NIfTI file or a DICOM series folder, skull-strips it with HD-BET, turns the result into an STL mesh, and simplifies it a little so your slicer does not file a complaint.
 
-The app uses HD-BET through its command line interface, then meshes the resulting brain volume with marching cubes.
+What It Does
+------------
 
-Setup With uv
--------------
+- Opens `.nii`, `.nii.gz`, or a DICOM series folder.
+- Converts DICOM to NIfTI when needed.
+- Runs HD-BET skull stripping.
+- Uses CUDA automatically when PyTorch sees a CUDA GPU.
+- Falls back to CPU when CUDA is not available.
+- Converts the skull-stripped brain to STL.
+- Applies mild mesh simplification.
+
+Quick Start
+-----------
 
 Install `uv`, then run:
 
@@ -19,78 +25,104 @@ Install `uv`, then run:
 .\run.ps1
 ```
 
-The script automatically creates/updates the local environment, installs the app, installs HD-BET, and launches the GUI.
+That creates or updates the local environment, installs the entire medical-imaging parade, and launches the app.
 
-You can also run the same steps manually:
+Manual `uv` version:
 
 ```powershell
 uv sync
 uv run brain-to-stl
 ```
 
-Setup With pip
---------------
+Pip Version
+-----------
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\activate
 python -m pip install -e .
-```
-
-Run
----
-
-If you used `uv`:
-
-```powershell
-uv run brain-to-stl
-```
-
-If you used `pip` inside an activated virtual environment:
-
-```powershell
 brain-to-stl
 ```
 
-Or:
+Using The App
+-------------
 
-```powershell
-python -m brain_to_stl.gui
-```
-
-In the GUI:
-
-- Choose the input NIfTI file or DICOM series folder.
-- Choose an output folder, or keep the automatic folder.
-- Click **Run**.
-- Use the napari buttons to inspect the original NIfTI, the skull-stripped NIfTI, or the STL mesh.
-
-The app automatically uses CUDA for HD-BET when PyTorch detects an available CUDA GPU. Otherwise it falls back to CPU. STL thresholding, mild mesh simplification, and mesh cleanup use built-in defaults.
-
-For DICOM input, select the folder containing one DICOM series. If the folder contains multiple series, the app uses the largest series and writes an intermediate `*_input.nii.gz` file in the output folder.
+1. Click `NIfTI` or `DICOM folder`.
+2. Pick an output folder, or let the app choose one.
+3. Click `Run`.
+4. Wait while HD-BET thinks very deep thoughts.
+5. Print responsibly. Tiny desk brains are powerful objects.
 
 Outputs
 -------
 
-For an input like `scan.nii.gz`, the app creates:
+For `scan.nii.gz`, BrainToSTL writes:
 
-- `scan_brain.nii.gz`: HD-BET skull-stripped NIfTI.
-- `scan_brain.stl`: printable binary STL.
+- `scan_brain.nii.gz`: skull-stripped NIfTI.
+- `scan_brain.stl`: printable STL mesh.
 
-Build A Single Executable
--------------------------
+For DICOM input, it also writes:
+
+- `<dicom_folder>_input.nii.gz`: intermediate converted NIfTI.
+
+If a DICOM folder contains multiple series, the app uses the largest series. This is usually the main scan, but please check the output before trusting anything important.
+
+Build A Standalone EXE
+----------------------
 
 ```powershell
 .\build_exe.ps1
 ```
 
-The executable will be written under `dist\BrainToSTL.exe`.
+The executable appears here:
 
-The build script sets the app icon, regenerates the PyInstaller spec, and explicitly collects HD-BET, nnU-Net, SimpleITK, napari, Qt, vispy, pydantic, imageio, and meshio modules. This matters because nnU-Net and napari load many classes dynamically at runtime.
+```powershell
+dist\BrainToSTL.exe
+```
 
-If the app opens duplicate GUI windows during HD-BET inference, rebuild the executable from the latest source. The launcher includes the Windows multiprocessing guard required by PyInstaller and nnU-Net worker processes.
+The build script does a few unglamorous but necessary things:
 
-Notes
------
+- Sets the app icon.
+- Regenerates the PyInstaller spec.
+- Bundles HD-BET, nnU-Net, SimpleITK, fast-simplification, and friends.
+- Adds PyInstaller-friendly handling for Windows multiprocessing.
 
-HD-BET is a deep-learning tool and can be slow on CPU. GPU use is faster, but requires a working PyTorch/CUDA setup. Input files should be 3D NIfTI MRI volumes or DICOM folders representing a single 3D series; 4D sequences should be split into individual volumes first.
+Release On GitHub
+-----------------
+
+Do not commit the built `.exe`. Put generated files in `.gitignore`, then upload the exe as a GitHub Release asset.
+
+Typical flow:
+
+```powershell
+.\build_exe.ps1
+git add README.md pyproject.toml uv.lock run.ps1 build_exe.ps1 brain_to_stl brain_to_stl_app.py assets .gitignore
+git commit -m "Prepare Windows release"
+git push
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Then create a GitHub release in the browser and upload:
+
+```powershell
+dist\BrainToSTL.exe
+```
+
+Notes From The Imaging Mines
+----------------------------
+
+HD-BET is deep-learning software. It can be slow on CPU. CUDA is faster, but only if your PyTorch/CUDA setup is healthy.
+
+Input should be a 3D NIfTI volume or a DICOM folder representing one 3D series. If you have a 4D scan, split it first.
+
+PyInstaller is wonderful, but packaging deep-learning medical imaging tools is still a small negotiation with the universe. If the standalone app behaves strangely, rebuild from a clean source tree with:
+
+```powershell
+.\build_exe.ps1
+```
+
+Not Medical Advice
+------------------
+
+This is a visualization and 3D-printing utility, not a diagnostic device. Please do not make clinical decisions based on a charming plastic brain.

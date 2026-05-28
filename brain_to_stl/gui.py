@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import multiprocessing
 import queue
-import subprocess
 import sys
 import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from .pipeline import PipelineConfig, default_output_dir, run_pipeline, validate_input_path, validate_nifti_path
+from .pipeline import PipelineConfig, default_output_dir, run_pipeline, validate_input_path
 
 
 class BrainToStlApp(tk.Tk):
@@ -25,9 +24,6 @@ class BrainToStlApp(tk.Tk):
         self.status_var = tk.StringVar(value="Select a NIfTI file or DICOM folder to begin.")
         self._log_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self._worker: threading.Thread | None = None
-        self._last_prepared_nifti: Path | None = None
-        self._last_brain_nifti: Path | None = None
-        self._last_stl: Path | None = None
 
         self._build_ui()
         self.after(100, self._drain_log_queue)
@@ -51,36 +47,8 @@ class BrainToStlApp(tk.Tk):
         ttk.Entry(main, textvariable=self.output_var).grid(row=1, column=1, sticky="ew", pady=(10, 0))
         ttk.Button(main, text="Browse", command=self._browse_output).grid(row=1, column=2, padx=(8, 0), pady=(10, 0))
 
-        viewer_tools = ttk.Frame(self, padding=(16, 0, 16, 12))
-        viewer_tools.grid(row=1, column=0, sticky="ew")
-        viewer_tools.columnconfigure(3, weight=1)
-
-        self.open_original_button = ttk.Button(
-            viewer_tools,
-            text="Open input in napari",
-            command=lambda: self._open_selected_input(),
-            state="disabled",
-        )
-        self.open_original_button.grid(row=0, column=0, sticky="w")
-
-        self.open_brain_button = ttk.Button(
-            viewer_tools,
-            text="Open skull stripped in napari",
-            command=lambda: self._open_in_napari("nifti", self._last_brain_nifti),
-            state="disabled",
-        )
-        self.open_brain_button.grid(row=0, column=1, sticky="w", padx=(8, 0))
-
-        self.open_stl_button = ttk.Button(
-            viewer_tools,
-            text="Open STL in napari",
-            command=lambda: self._open_in_napari("stl", self._last_stl),
-            state="disabled",
-        )
-        self.open_stl_button.grid(row=0, column=2, sticky="w", padx=(8, 0))
-
         log_frame = ttk.Frame(self, padding=(16, 0, 16, 0))
-        log_frame.grid(row=2, column=0, sticky="nsew")
+        log_frame.grid(row=1, column=0, sticky="nsew")
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
 
@@ -91,7 +59,7 @@ class BrainToStlApp(tk.Tk):
         self.log_text.configure(yscrollcommand=scrollbar.set)
 
         footer = ttk.Frame(self, padding=16)
-        footer.grid(row=3, column=0, sticky="ew")
+        footer.grid(row=2, column=0, sticky="ew")
         footer.columnconfigure(0, weight=1)
         ttk.Label(footer, textvariable=self.status_var).grid(row=0, column=0, sticky="w")
         self.run_button = ttk.Button(footer, text="Run", command=self._run)
@@ -120,10 +88,6 @@ class BrainToStlApp(tk.Tk):
         if path:
             self.input_var.set(path)
             self.output_var.set(str(default_output_dir(Path(path))))
-            self._last_prepared_nifti = None
-            self._last_brain_nifti = None
-            self._last_stl = None
-            self._refresh_viewer_buttons()
 
     def _browse_output(self) -> None:
         path = filedialog.askdirectory(title="Select output folder")
@@ -146,10 +110,6 @@ class BrainToStlApp(tk.Tk):
             return
 
         self._clear_log()
-        self._last_prepared_nifti = None
-        self._last_brain_nifti = None
-        self._last_stl = None
-        self._refresh_viewer_buttons()
         self.status_var.set("Running...")
         self.run_button.configure(state="disabled")
         self._worker = threading.Thread(target=self._worker_run, args=(config,), daemon=True)
@@ -172,14 +132,10 @@ class BrainToStlApp(tk.Tk):
             if kind == "log":
                 self._append_log(str(message))
             elif kind == "done":
-                self._last_prepared_nifti = message.prepared_nifti
-                self._last_brain_nifti = message.skull_stripped_nifti
-                self._last_stl = message.stl_file
                 done_message = f"Created STL: {message.stl_file}"
                 self._append_log(done_message)
                 self.status_var.set("Finished.")
                 self.run_button.configure(state="normal")
-                self._refresh_viewer_buttons()
                 messagebox.showinfo("Finished", done_message)
             elif kind == "error":
                 self._append_log(f"ERROR: {message}")
@@ -199,56 +155,6 @@ class BrainToStlApp(tk.Tk):
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0", "end")
         self.log_text.configure(state="disabled")
-
-    def _open_selected_input(self) -> None:
-        try:
-            nifti = validate_nifti_path(self.input_var.get())
-        except Exception:
-            nifti = self._last_prepared_nifti
-            if nifti is None:
-                messagebox.showerror("Cannot open input", "Run the pipeline first to convert the DICOM series to NIfTI.")
-                return
-        self._open_in_napari("nifti", nifti)
-
-    def _open_in_napari(self, kind: str, path: Path | None) -> None:
-        if path is None or not path.exists():
-            messagebox.showerror("Cannot open in napari", "The file is not available yet.")
-            return
-
-        command = _napari_command(kind, path)
-        try:
-            subprocess.Popen(command, close_fds=True)
-        except Exception as exc:
-            messagebox.showerror("Cannot open in napari", str(exc))
-
-    def _refresh_viewer_buttons(self) -> None:
-        original_state = (
-            "normal"
-            if _input_nifti_exists(self.input_var.get())
-            or (self._last_prepared_nifti and self._last_prepared_nifti.exists())
-            else "disabled"
-        )
-        brain_state = "normal" if self._last_brain_nifti and self._last_brain_nifti.exists() else "disabled"
-        stl_state = "normal" if self._last_stl and self._last_stl.exists() else "disabled"
-        self.open_original_button.configure(state=original_state)
-        self.open_brain_button.configure(state=brain_state)
-        self.open_stl_button.configure(state=stl_state)
-
-
-def _napari_command(kind: str, path: Path) -> list[str]:
-    if getattr(sys, "frozen", False):
-        return [sys.executable, "--napari", kind, str(path)]
-    return [sys.executable, "-m", "brain_to_stl.napari_viewer", kind, str(path)]
-
-
-def _input_nifti_exists(path: str) -> bool:
-    if not path.strip():
-        return False
-    try:
-        validate_nifti_path(path)
-    except Exception:
-        return False
-    return True
 
 
 def _resource_path(relative_path: str) -> Path:

@@ -1,2 +1,0 @@
-[console_scripts]
-brain-to-stl = brain_to_stl.gui:main

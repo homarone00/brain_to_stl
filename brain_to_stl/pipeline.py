@@ -21,7 +21,7 @@ class PipelineConfig:
     hdbet_command: str = "hd-bet"
     threshold: float | None = None
     keep_largest_component: bool = True
-    simplification_reduction: float = 0.35
+    simplification_reduction: float = 0.25
     step_size: int = 1
 
 
@@ -220,7 +220,7 @@ def nifti_to_stl(
     *,
     threshold: float | None = None,
     keep_largest_component: bool = True,
-    simplification_reduction: float = 0.35,
+    simplification_reduction: float = 0.25,
     step_size: int = 1,
     log: LogFn = print,
 ) -> None:
