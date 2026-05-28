@@ -88,3 +88,11 @@ The executable appears here:
 ```powershell
 dist\BrainToSTL.exe
 ```
+
+Build A Standalone EXE
+----------------------
+Super important command to release things
+
+```powershell
+gh release create vx.x.x .\dist\BrainToSTL.exe --title "BrainToSTL vx.x.x" --notes "Windows standalone release of BrainToSTL."
+```
