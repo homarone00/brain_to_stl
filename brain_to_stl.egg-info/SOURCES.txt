@@ -2,6 +2,7 @@ README.md
 pyproject.toml
 brain_to_stl/__init__.py
 brain_to_stl/gui.py
+brain_to_stl/napari_viewer.py
 brain_to_stl/pipeline.py
 brain_to_stl.egg-info/PKG-INFO
 brain_to_stl.egg-info/SOURCES.txt

@@ -7,12 +7,19 @@ name = "brain-to-stl"
 version = "0.1.0"
 description = "GUI tool for HD-BET skull stripping and NIfTI to printable STL conversion."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10, <=3.12"
 dependencies = [
+  "fast-simplification>=0.1.13",
   "hd-bet>=2.0.1",
+  "ipywidgets>=8.1.8",
+  "meshio>=5.3",
+  "napari[all]>=0.5",
   "nibabel>=5.2",
   "numpy>=1.24",
+  "pyopengl-accelerate>=3.1.10",
   "scikit-image>=0.22",
+  "SimpleITK>=2.3",
+  "superqt[cmap]>=0.8.2",
 ]
 
 [project.optional-dependencies]

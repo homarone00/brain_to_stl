@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import contextlib
+import shutil
 import shlex
 import subprocess
+import sys
+import sysconfig
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -12,31 +16,36 @@ LogFn = Callable[[str], None]
 
 @dataclass(frozen=True)
 class PipelineConfig:
-    input_nifti: Path
+    input_path: Path
     output_dir: Path
     hdbet_command: str = "hd-bet"
     threshold: float | None = None
     keep_largest_component: bool = True
+    simplification_reduction: float = 0.35
     step_size: int = 1
 
 
 @dataclass(frozen=True)
 class PipelineResult:
+    prepared_nifti: Path
     skull_stripped_nifti: Path
     stl_file: Path
 
 
 def run_pipeline(config: PipelineConfig, log: LogFn = print) -> PipelineResult:
-    input_nifti = config.input_nifti.resolve()
+    input_path = config.input_path.resolve()
     output_dir = config.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    brain_nifti = output_dir / f"{_nifti_stem(input_nifti)}_brain.nii.gz"
-    stl_file = output_dir / f"{_nifti_stem(input_nifti)}_brain.stl"
+    prepared_nifti = prepare_input_nifti(input_path, output_dir, log)
+    output_stem = _input_stem(input_path)
+    brain_nifti = output_dir / f"{output_stem}_brain.nii.gz"
+    stl_file = output_dir / f"{output_stem}_brain.stl"
 
-    log(f"Input: {input_nifti}")
+    log(f"Input: {input_path}")
+    log(f"Prepared NIfTI: {prepared_nifti}")
     log(f"Skull-stripped NIfTI: {brain_nifti}")
-    run_hdbet(input_nifti, config, brain_nifti, log)
+    run_hdbet(prepared_nifti, config, brain_nifti, log)
 
     log(f"STL output: {stl_file}")
     nifti_to_stl(
@@ -44,21 +53,77 @@ def run_pipeline(config: PipelineConfig, log: LogFn = print) -> PipelineResult:
         stl_file,
         threshold=config.threshold,
         keep_largest_component=config.keep_largest_component,
+        simplification_reduction=config.simplification_reduction,
         step_size=config.step_size,
         log=log,
     )
 
     log("Done.")
-    return PipelineResult(skull_stripped_nifti=brain_nifti, stl_file=stl_file)
+    return PipelineResult(prepared_nifti=prepared_nifti, skull_stripped_nifti=brain_nifti, stl_file=stl_file)
+
+
+def prepare_input_nifti(input_path: Path, output_dir: Path, log: LogFn) -> Path:
+    if is_nifti_path(input_path):
+        return input_path
+    if input_path.is_dir():
+        nifti_path = output_dir / f"{_input_stem(input_path)}_input.nii.gz"
+        convert_dicom_series_to_nifti(input_path, nifti_path, log)
+        return nifti_path
+    raise ValueError("Please select a .nii/.nii.gz file or a DICOM series folder.")
+
+
+def convert_dicom_series_to_nifti(dicom_dir: Path, nifti_path: Path, log: LogFn) -> None:
+    try:
+        import SimpleITK as sitk
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("Missing DICOM dependency. Run: uv sync") from exc
+
+    log("Reading DICOM series...")
+    series_ids = sitk.ImageSeriesReader.GetGDCMSeriesIDs(str(dicom_dir))
+    if not series_ids:
+        raise ValueError(f"No DICOM series found in folder: {dicom_dir}")
+
+    series_files = [
+        (series_id, sitk.ImageSeriesReader.GetGDCMSeriesFileNames(str(dicom_dir), series_id))
+        for series_id in series_ids
+    ]
+    series_id, file_names = max(series_files, key=lambda item: len(item[1]))
+    if len(series_ids) > 1:
+        log(f"Found {len(series_ids)} DICOM series; using largest series with {len(file_names)} files.")
+    else:
+        log(f"Found DICOM series with {len(file_names)} files.")
+
+    reader = sitk.ImageSeriesReader()
+    reader.MetaDataDictionaryArrayUpdateOn()
+    reader.LoadPrivateTagsOn()
+    reader.SetFileNames(file_names)
+    image = reader.Execute()
+
+    log(f"Writing DICOM conversion: {nifti_path}")
+    sitk.WriteImage(image, str(nifti_path))
 
 
 def run_hdbet(input_nifti: Path, config: PipelineConfig, output_nifti: Path, log: LogFn) -> None:
     device = detect_hdbet_device()
-    command = [config.hdbet_command, "-i", str(input_nifti), "-o", str(output_nifti)]
-    command.extend(["-device", device, "--disable_tta"])
+    hdbet_args = ["-i", str(input_nifti), "-o", str(output_nifti), "-device", device, "--disable_tta"]
 
     log(f"Running HD-BET on {device.upper()}...")
-    log(" ".join(shlex.quote(part) for part in command))
+    command = resolve_hdbet_command(config.hdbet_command)
+    if command is None:
+        log(f"{config.hdbet_command} " + " ".join(shlex.quote(part) for part in hdbet_args))
+        run_hdbet_in_process(hdbet_args, log)
+    else:
+        command.extend(hdbet_args)
+        log(" ".join(shlex.quote(part) for part in command))
+        run_hdbet_subprocess(command, config, log)
+
+    if not output_nifti.exists():
+        raise RuntimeError(
+            "HD-BET finished, but the expected skull-stripped NIfTI was not created."
+        )
+
+
+def run_hdbet_subprocess(command: list[str], config: PipelineConfig, log: LogFn) -> None:
     try:
         process = subprocess.Popen(
             command,
@@ -71,7 +136,7 @@ def run_hdbet(input_nifti: Path, config: PipelineConfig, output_nifti: Path, log
     except FileNotFoundError as exc:
         raise RuntimeError(
             f"Could not find HD-BET command '{config.hdbet_command}'. "
-            "Install HD-BET with: python -m pip install -e .[hdbet]"
+            "Install dependencies with: uv sync"
         ) from exc
 
     assert process.stdout is not None
@@ -81,10 +146,64 @@ def run_hdbet(input_nifti: Path, config: PipelineConfig, output_nifti: Path, log
     return_code = process.wait()
     if return_code != 0:
         raise RuntimeError(f"HD-BET failed with exit code {return_code}.")
-    if not output_nifti.exists():
+
+
+def run_hdbet_in_process(args: list[str], log: LogFn) -> None:
+    try:
+        from HD_BET.entry_point import main as hdbet_main
+    except ModuleNotFoundError as exc:
         raise RuntimeError(
-            "HD-BET finished, but the expected skull-stripped NIfTI was not created."
-        )
+            "HD-BET is not bundled in this executable. Rebuild with the PyInstaller "
+            "HD-BET collection options from the README."
+        ) from exc
+
+    original_argv = sys.argv[:]
+    sys.argv = ["hd-bet", *args]
+    try:
+        with contextlib.redirect_stdout(_LogWriter(log)), contextlib.redirect_stderr(_LogWriter(log)):
+            hdbet_main()
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 1
+        if code:
+            raise RuntimeError(f"HD-BET failed with exit code {code}.") from exc
+    finally:
+        sys.argv = original_argv
+
+
+class _LogWriter:
+    def __init__(self, log: LogFn) -> None:
+        self.log = log
+        self.buffer = ""
+
+    def write(self, text: str) -> int:
+        self.buffer += text
+        while "\n" in self.buffer:
+            line, self.buffer = self.buffer.split("\n", 1)
+            if line:
+                self.log(line)
+        return len(text)
+
+    def flush(self) -> None:
+        if self.buffer:
+            self.log(self.buffer)
+            self.buffer = ""
+
+
+def resolve_hdbet_command(command_name: str) -> list[str] | None:
+    if getattr(sys, "frozen", False):
+        return None
+
+    scripts_dir = Path(sysconfig.get_path("scripts"))
+    candidates = [
+        scripts_dir / f"{command_name}.exe",
+        scripts_dir / command_name,
+        shutil.which(command_name),
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).exists():
+            return [str(candidate)]
+
+    return None
 
 
 def detect_hdbet_device() -> str:
@@ -101,6 +220,7 @@ def nifti_to_stl(
     *,
     threshold: float | None = None,
     keep_largest_component: bool = True,
+    simplification_reduction: float = 0.35,
     step_size: int = 1,
     log: LogFn = print,
 ) -> None:
@@ -155,9 +275,48 @@ def nifti_to_stl(
     )
     verts -= 1.0
     verts = nib.affines.apply_affine(img.affine, verts)
+    verts, faces = simplify_mesh(
+        verts,
+        faces,
+        target_reduction=simplification_reduction,
+        log=log,
+    )
 
     log(f"Writing STL mesh: {len(verts):,} vertices, {len(faces):,} faces...")
     write_binary_stl(stl_path, verts, faces)
+
+
+def simplify_mesh(vertices, faces, *, target_reduction: float, log: LogFn):
+    import numpy as np
+
+    if target_reduction <= 0 or len(faces) < 10_000:
+        return vertices, faces
+
+    try:
+        import fast_simplification
+    except ModuleNotFoundError:
+        log("Mesh simplification skipped: fast-simplification is not installed.")
+        return vertices, faces
+
+    target_reduction = min(max(float(target_reduction), 0.0), 0.85)
+    original_faces = len(faces)
+    log(f"Simplifying mesh by {target_reduction:.0%}...")
+    try:
+        simplified_vertices, simplified_faces = fast_simplification.simplify(
+            np.asarray(vertices, dtype=np.float64),
+            np.asarray(faces, dtype=np.uint32),
+            target_reduction,
+        )
+    except Exception as exc:
+        log(f"Mesh simplification skipped: {exc}")
+        return vertices, faces
+
+    if len(simplified_faces) == 0:
+        log("Mesh simplification skipped: simplifier produced an empty mesh.")
+        return vertices, faces
+
+    log(f"Simplified mesh faces: {original_faces:,} -> {len(simplified_faces):,}")
+    return simplified_vertices, simplified_faces
 
 
 def write_binary_stl(stl_path: Path, vertices, faces) -> None:
@@ -193,14 +352,33 @@ def _nifti_stem(path: Path) -> str:
     return path.stem
 
 
-def default_output_dir(input_nifti: Path) -> Path:
-    return input_nifti.parent / f"{_nifti_stem(input_nifti)}_brain_to_stl"
+def _input_stem(path: Path) -> str:
+    return _nifti_stem(path) if is_nifti_name(path) else path.name
+
+
+def is_nifti_path(path: Path) -> bool:
+    return path.is_file() and is_nifti_name(path)
+
+
+def is_nifti_name(path: Path) -> bool:
+    return path.name.endswith(".nii") or path.name.endswith(".nii.gz")
+
+
+def default_output_dir(input_path: Path) -> Path:
+    return input_path.parent / f"{_input_stem(input_path)}_brain_to_stl"
+
+
+def validate_input_path(path: str) -> Path:
+    input_path = Path(path)
+    if not input_path.exists():
+        raise FileNotFoundError(path)
+    if is_nifti_path(input_path) or input_path.is_dir():
+        return input_path
+    raise ValueError("Please select a .nii/.nii.gz file or a DICOM series folder.")
 
 
 def validate_nifti_path(path: str) -> Path:
-    nifti = Path(path)
-    if not nifti.exists():
-        raise FileNotFoundError(path)
-    if not (nifti.name.endswith(".nii") or nifti.name.endswith(".nii.gz")):
+    input_path = Path(path)
+    if not is_nifti_path(input_path):
         raise ValueError("Please select a .nii or .nii.gz file.")
-    return nifti
+    return input_path
