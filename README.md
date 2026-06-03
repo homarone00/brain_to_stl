@@ -88,3 +88,16 @@ The executable appears here:
 ```powershell
 dist\BrainToSTL.exe
 ```
+
+How to release
+----------------------
+```powershell
+dist\BrainToSTL.exe
+```
+git add [what i want to add]
+git commit -m "message"
+git tag vx.x.x
+git push origin main --tags
+
+gh release create vx.x.x dist\BrainToSTL.exe --title "BrainToSTL vx.x.x" --notes "Windows standalone release of BrainToSTL."
+

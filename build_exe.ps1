@@ -4,8 +4,10 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     throw "uv is not installed. Install it from https://docs.astral.sh/uv/ and run this script again."
 }
 
+if (Test-Path .venv) {
+    Remove-Item -Recurse -Force .venv
+}
 uv sync --extra build
-uv run python -m compileall -j 8 .
 if (Test-Path BrainToSTL.spec) {
     Remove-Item -LiteralPath BrainToSTL.spec -Force
 }

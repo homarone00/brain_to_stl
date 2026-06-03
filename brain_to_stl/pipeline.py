@@ -21,7 +21,7 @@ class PipelineConfig:
     hdbet_command: str = "hd-bet"
     threshold: float | None = None
     keep_largest_component: bool = True
-    simplification_reduction: float = 0.25
+    simplification_reduction: float = 0.9
     step_size: int = 1
 
 
@@ -193,15 +193,19 @@ def resolve_hdbet_command(command_name: str) -> list[str] | None:
     if getattr(sys, "frozen", False):
         return None
 
-    scripts_dir = Path(sysconfig.get_path("scripts"))
-    candidates = [
-        scripts_dir / f"{command_name}.exe",
-        scripts_dir / command_name,
-        shutil.which(command_name),
-    ]
-    for candidate in candidates:
-        if candidate and Path(candidate).exists():
-            return [str(candidate)]
+    # Prefer calling HD-BET through the current Python interpreter to avoid
+    # uv trampoline failures on Windows (the .exe shims can't canonicalize
+    # their own path when uv isn't on PATH).
+    try:
+        import HD_BET  # noqa: F401
+        return [sys.executable, "-m", "HD_BET.entry_point"]
+    except ModuleNotFoundError:
+        pass
+
+    # Fall back to a standalone hd-bet executable on PATH.
+    found = shutil.which(command_name)
+    if found:
+        return [found]
 
     return None
 
@@ -220,13 +224,14 @@ def nifti_to_stl(
     *,
     threshold: float | None = None,
     keep_largest_component: bool = True,
-    simplification_reduction: float = 0.25,
+    simplification_reduction: float = 0.5,
     step_size: int = 1,
     log: LogFn = print,
 ) -> None:
     try:
         import nibabel as nib
         import numpy as np
+        from scipy.ndimage import binary_fill_holes
         from skimage import measure
     except ModuleNotFoundError as exc:
         raise RuntimeError(
@@ -261,6 +266,8 @@ def nifti_to_stl(
             raise ValueError("No connected brain component was found.")
         component_sizes[0] = 0
         mask = labels == int(component_sizes.argmax())
+
+    mask = binary_fill_holes(mask)
 
     voxel_count = int(mask.sum())
     if voxel_count == 0:
